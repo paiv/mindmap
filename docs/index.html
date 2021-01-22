@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:image/png;base64,">
+    <title></title>
+
+<style media="screen">
+:root {--bg:#fff; --fg:#000; --mg:#888}
+@media (prefers-color-scheme:dark) {:root {--bg:#202124;--fg:#f1f3f4;}}
+body, body * {background:var(--bg); color:var(--fg);}
+#canvas {position:relative;}
+#dropzone {display:none; position:absolute; top:50%; width:20em; height:10em;
+    border:1px dashed var(--mg); border-radius:1em;
+    justify-content:center;}
+#dropzone:hover {border-color:var(--fg);}
+.nl {margin-left:2em;}
+</style>
+</head>
+<body>
+
+<div id="canvas">
+
+    <div id="dropzone">
+        Drop files here (.mindnode)
+    </div>
+</div>
+
+<script type="text/javascript">
+function dragEnterDocument(e) {
+    const dropzone = document.getElementById('dropzone')
+    dropzone.style.display = 'flex'
+}
+function dragOverDropzone(e) {
+    e.preventDefault()
+    dropzone.style.display = 'flex'
+    e.dataTransfer.dropEffect = 'copy'
+}
+function dropToDropzone(e) {
+    const items = e.dataTransfer.items
+    e.preventDefault()
+    for (const item of items) {
+        const entry = item.webkitGetAsEntry()
+        if (entry.isDirectory && entry.name.endsWith('.mindnode')) {
+            importMindnodeDropItem(entry)
+        }
+    }
+    const dropzone = document.getElementById('dropzone')
+    dropzone.style.display = 'none'
+}
+function importMindnodeDropItem(item) {
+    const reader = item.createReader()
+    reader.readEntries(entries => {
+        for (const entry of entries) {
+            if (entry.isFile && entry.name === 'contents.xml') {
+                importMindnodeContent(entry)
+            }
+        }
+    })
+}
+function importMindnodeContent(entry) {
+    entry.file(fp => {
+        const reader = new FileReader()
+        reader.onload = () => {
+            const data = reader.result
+            const parser = new DOMParser()
+            const doc = parser.parseFromString(data, 'text/xml')
+            const obj = parsePlistXml(doc)
+            importMindnodeObj(obj)
+        }
+        reader.readAsText(fp)
+    })
+}
+function importMindnodeObj(obj) {
+    document.title = obj.title
+    function* walkTree(obj, level) {
+        yield [level, obj]
+        for (const child of obj.subnodes) {
+            yield* walkTree(child, level + 1)
+        }
+    }
+    function emitTree(rootObj) {
+        const root = document.createElement('div')
+        let stack = [root]
+        for (const [level, node] of walkTree(rootObj, 1)) {
+            while (level < stack.length) {
+                stack.pop()
+            }
+            if (level > stack.length) {
+                const parent = stack[stack.length - 1]
+                const div = document.createElement('div')
+                div.classList.add('nl')
+                parent.appendChild(div)
+                stack.push(div)
+            }
+            if (node.title) {
+                const span = decodeRtf(node.title.text)
+                const parent = stack[stack.length - 1]
+                const div = document.createElement('div')
+                div.classList.add('nl')
+                div.appendChild(span)
+                parent.appendChild(div)
+            }
+            else {
+                console.error(level, node)
+            }
+        }
+        const canvas = document.querySelector('#canvas')
+        canvas.appendChild(root)
+    }
+    for (const main of obj.mindMap.mainNodes) {
+        emitTree(main)
+    }
+}
+function decodeRtf(text) { // http://go.microsoft.com/fwlink/?LinkId=120924
+    const [INIT, GROUP, ESC, CTRLW, CTRLN, CTRLS] = [0, 1, 2, 3, 4, 5]
+    const span = document.createElement('span')
+    let state = INIT
+    let stack = []
+    for (const char of text) {
+        let consumed
+        do {
+            consumed = true
+            switch (state) {
+            case INIT: {
+                if (char === '{') {
+                    stack.push(0)
+                    state = GROUP
+                }
+            }
+            break
+            case GROUP: {
+                if (char === '\\') {
+                    state = ESC
+                }
+                else if (char === '{') {
+                    stack.push(0)
+                }
+                else if (char === '}') {
+                    stack.pop()
+                    state = stack.length ? GROUP : INIT
+                }
+                else if (char === '\n') {
+                }
+                else if (stack.length === 1) {
+                    span.textContent += char
+                }
+            }
+            break
+            case ESC: {
+                if (/[a-zA-Z]/.test(char)) {
+                    state = CTRLW
+                }
+                else if (/[\{\}\\]/.test(char)) {
+                    span.textContent += char
+                    state = GROUP
+                }
+                else if (char === '*') {
+                    state = GROUP
+                }
+                else {
+                    console.error(state, `(${stack.length})`, JSON.stringify(char), JSON.stringify(span.textContent))
+                }
+            }
+            break
+            case CTRLW: {
+                if (/[a-zA-Z]/.test(char)) {
+                }
+                else if (/[0-9-]/.test(char)) {
+                    state = CTRLN
+                }
+                else if (/[ \t]/.test(char)) {
+                    state = GROUP
+                }
+                else {
+                    state = GROUP
+                    consumed = false
+                }
+            }
+            break
+            case CTRLN: {
+                if (/[0-9]/.test(char)) {
+                }
+                else if (/[ \t]/.test(char)) {
+                    state = GROUP
+                }
+                else {
+                    state = GROUP
+                    consumed = false
+                }
+            }
+            break
+            }
+        }
+        while (!consumed)
+    }
+    return span
+}
+function parsePlistXml(doc) {
+    function parse_el(el) {
+        const px = parsers[el.tagName]
+        if (!px) {
+            console.error('plist: missing parser for', JSON.stringify(el.tagName))
+            parsers[el.tagName] = () => {}
+        }
+        else {
+            return px(el)
+        }
+    }
+    function parse_array(el) {
+        let obj = new Array()
+        for (const child of el.children) {
+            obj.push(parse_el(child))
+        }
+        return obj
+    }
+    function parse_dict(el) {
+        let obj = {}
+        let key = undefined
+        for (const child of el.children) {
+            if (key) {
+                const value = parse_el(child)
+                obj[key] = value
+                key = undefined
+            }
+            else {
+                key = child.textContent
+            }
+        }
+        return obj
+    }
+    function parse_false(el) {
+        return false
+    }
+    function parse_true(el) {
+        return true
+    }
+    function parse_integer(el) {
+        return Number.parseInt(el.textContent)
+    }
+    function parse_real(el) {
+        return Number.parseFloat(el.textContent)
+    }
+    function parse_string(el) {
+        return el.textContent
+    }
+    function parse_data(el) {
+        return atob(el.textContent.trim())
+    }
+    const parsers = {dict:parse_dict, array:parse_array, 'false':parse_false, 'true':parse_true,
+        integer:parse_integer, real:parse_real, string:parse_string, data:parse_data}
+    const root = doc.documentElement
+    for (const el of root.children) {
+        return parse_el(el)
+    }
+}
+function setupApp() {
+    document.addEventListener('dragenter', dragEnterDocument, false)
+    const dropzone = document.getElementById('dropzone')
+    dropzone.addEventListener('dragover', dragOverDropzone, false)
+    dropzone.addEventListener('drop', dropToDropzone, false)
+}
+window.addEventListener('DOMContentLoaded', setupApp)
+</script>
+</body>
+</html>
