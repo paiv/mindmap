@@ -15,7 +15,7 @@ body, body * {background:var(--bg); color:var(--fg);}
     border:1px dashed var(--mg); border-radius:1em;
     justify-content:center;}
 #dropzone:hover {border-color:var(--fg);}
-.nl {margin-left:2em;}
+details > :not(summary) {margin-left:2em;}
 </style>
 </head>
 <body>
@@ -81,24 +81,24 @@ function importMindnodeObj(obj) {
         }
     }
     function emitTree(rootObj) {
-        const root = document.createElement('div')
-        let stack = [root]
-        for (const [level, node] of walkTree(rootObj, 1)) {
+        let stack = []
+        for (const [level, node] of walkTree(rootObj, 0)) {
+            const hasChildren = node.subnodes.length > 0
             while (level < stack.length) {
                 stack.pop()
             }
-            if (level > stack.length) {
+            {
                 const parent = stack[stack.length - 1]
-                const div = document.createElement('div')
-                div.classList.add('nl')
-                parent.appendChild(div)
+                const div = document.createElement(hasChildren ? 'details' : 'div')
+                if (parent) {
+                    parent.appendChild(div)
+                }
                 stack.push(div)
             }
             if (node.title) {
                 const span = decodeRtf(node.title.text)
                 const parent = stack[stack.length - 1]
-                const div = document.createElement('div')
-                div.classList.add('nl')
+                const div = document.createElement(hasChildren ? 'summary' : 'div')
                 div.appendChild(span)
                 parent.appendChild(div)
             }
@@ -106,6 +106,8 @@ function importMindnodeObj(obj) {
                 console.error(level, node)
             }
         }
+        const root = stack[0]
+        root.setAttribute('open', '')
         const canvas = document.querySelector('#canvas')
         canvas.appendChild(root)
     }
